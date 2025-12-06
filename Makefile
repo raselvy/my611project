@@ -1,12 +1,10 @@
-.PHONY: clean all report.html report.pdf
+.PHONY: clean report.html report.pdf
 
-all: report.html
+report.html: final_project.Rmd pokemon_data.csv
+	 Rscript -e "rmarkdown::render('final_project.Rmd', output_format = 'html_document')"
 
-report.html: report.Rmd pokemon_data.csv
-	R -e "rmarkdown::render('report.Rmd', output_format='html_document')"
-
-report.pdf: report.Rmd pokemon_data.csv
-	R -e "rmarkdown::render('report.Rmd', output_format='pdf_document')"
+report.pdf: final_project.Rmd pokemon_data.csv
+	 Rscript -e "rmarkdown::render('final_project.Rmd', output_format = 'pdf_document')"
 
 clean:
-	rm -f *.html *.pdf *.log *.aux *.out *.toc
+	 rm -f *.html *.pdf
