@@ -9,4 +9,4 @@ report.pdf: report.Rmd pokemon_data.csv
 	R -e "rmarkdown::render('report.Rmd', output_format='pdf_document')"
 
 clean:
-  rm -f *.html *.pdf *.log *.aux *.out *.toc
+	rm -f *.html *.pdf *.log *.aux *.out *.toc
