@@ -1,0 +1,10 @@
+.Rhistory
+.RData
+.Rproj.user
+*.log
+*.aux
+*.toc
+*.out
+*.html
+*.pdf
+.DS_Store
