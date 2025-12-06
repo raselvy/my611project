@@ -1,0 +1,353 @@
+---
+title: "611 Final Project"
+author: "Rachel Selvaraj"
+date: "2025-11-18"
+output: html_document
+---
+
+```{r setup, include=FALSE, warning=FALSE, message=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+knitr::opts_chunk$set(warning = FALSE)
+knitr::opts_chunk$set(message = FALSE)
+library(tidyverse)
+library(ggridges)
+library(patchwork)
+library(corrplot)
+library(factoextra)
+library(cluster)
+library(ggcorrplot)
+pokemon_df<-read.csv("pokemon_data.csv")
+tier_order <- c(
+  "AG", "Uber", "OU","UUBL", "UU","RUBL", "RU", "NUBL" ,"NU", "PUBL","PU", "ZUBL" ,"ZU",  "NFE", "LC", "National Dex", NA)
+
+pokemon_df <- pokemon_df |>
+  mutate(
+    tier = factor(tier, levels = tier_order, ordered = TRUE)
+  )
+
+# Clean and prepare the data
+pokemon_clean <- pokemon_df %>%
+  filter(!is.na(primary_type)) %>%  # Remove rows without type information
+  mutate(
+    # Calculate base stat total
+    bst = hp + attack + defense + sp_attack + sp_defense + speed,
+    # Create type flags for both primary and secondary types
+    primary_type = as.factor(primary_type),
+    secondary_type = as.factor(secondary_type),
+    # Create a combined type variable for analysis
+    type_combined = ifelse(is.na(secondary_type), 
+                          as.character(primary_type),
+                          paste(primary_type, secondary_type, sep = "/"))
+  ) %>%
+  # Create separate rows for each type a Pokemon has
+  pivot_longer(
+    cols = c(primary_type, secondary_type),
+    names_to = "type_slot",
+    values_to = "type",
+    values_drop_na = TRUE
+  ) %>%
+  mutate(type = as.factor(type))
+```
+
+
+### Dataset information
+
+This dataset contains complete biological and competitive information on all currently released Pokemon species. Each observation corresponds to one Pokemon, with recorded base combat statistics including hit points (HP), attack, defense, special attack, special defense, and speed. Additional physical traits such as height, weight, capture rate, and typing (primary and secondary) are also included.
+
+Competitive information is incorporated through Smogon tier labels, which classify Pokemon based on their viability in organized battle formats. These tiers range from Little Cup (LC) to Anything Goes (AG), with higher tiers representing stronger competitive viability. The dataset also includes generational labels, allowing for comparisons across game eras.
+
+Missing secondary typing is handled explicitly, and duplicate Pokemon entries created during type expansion are removed for analyses that require one row per species.
+
+```{r figure1}
+figure1_data <- pokemon_clean %>%
+  group_by(type) %>%
+  summarise(
+    avg_bst = mean(bst, na.rm = TRUE),
+    median_bst = median(bst, na.rm = TRUE),
+    se_bst = sd(bst, na.rm = TRUE) / sqrt(n()),
+    n = n()
+  ) %>%
+  filter(!is.na(type) & type != "")
+
+figure1 <- ggplot(figure1_data, aes(x = reorder(type, avg_bst), y = avg_bst, fill = avg_bst)) +
+  geom_bar(stat = "identity", alpha = 0.8,color="black") +
+  geom_errorbar(aes(ymin = avg_bst - se_bst, ymax = avg_bst + se_bst), 
+                width = 0.2, color = "black") +
+  geom_text(aes(label = paste0("n=", n)), 
+            hjust = -1, size = 2) +
+  scale_fill_viridis_c(option = "plasma", direction = -1) +
+  coord_flip() +
+  labs(title = "Average Base Stat Total by Type",
+       x = "Type",
+       y = "Average Base Stat Total",
+       fill = "BST") +
+  theme_bw() +
+  theme(legend.position = "hide")
+print(figure1)
+```
+
+This figure investigates whether certain Pokemon types are inherently stronger on average. The results show that dragon, steel, and fighting types tend to have the highest average base stat totals, while bug and normal types generally occupy lower ranges. This makes sense as bug and normal types are found earlier in-game and either don't evolve at all or only evolve once. On the other hand, dragon, steel and fighting are more commonly legendary-associated types or rarer Pokemon, implying stronger battle capabilities.
+
+```{r figure 2}
+pokemon_df <- pokemon_df %>%
+  mutate(
+    bst = rowSums(select(., hp, attack, defense, sp_attack, sp_defense, speed), na.rm = TRUE)
+  )
+plot2 <- ggplot(pokemon_df, aes(x = speed, y = capture_rate,color = log(bst))) +
+  geom_point(alpha = 0.7) +
+  geom_smooth(method = "loess", se = TRUE, color = "black", linewidth = 0.8) +
+  scale_color_viridis_c(option = "plasma") +
+  scale_x_log10() +
+  scale_y_log10() +
+  labs(
+    title = "Speed vs. Capture Rate by Base Stat Total",
+    x = "Speed Stat (log scale)",
+    y = "Capture Rate (log scale)",
+    color = "BST (log scale)"
+  ) +
+  theme_bw() +
+  theme(
+    legend.position = "right")
+print(plot2)
+```
+
+This figure explores whether faster Pokemon are harder to obtain in-game. A weak negative trend is observed: higher BST Pokemon tend to have lower capture rates, particularly among fast Pokemon. This suggests intentional game balancing between power and accessibility. Also, players' ability to capture Pokemon increases throughout the games as upgraded capture equipment becomes available- this also seems to be an intentional game choice.
+
+```{r figure3}
+# Prepare data for boxplots
+figure3_data <- pokemon_clean %>%
+  distinct(national_number, .keep_all = TRUE) %>%  # Remove duplicate rows from type expansion
+  select(gen, attack, sp_attack) %>%
+  pivot_longer(
+    cols = c(attack, sp_attack),
+    names_to = "stat_type",
+    values_to = "stat_value"
+  ) %>%
+  mutate(
+    stat_type = factor(stat_type, levels = c("attack", "sp_attack"),
+                      labels = c("Attack", "Special Attack")),
+    gen = factor(gen)
+  )
+
+# Create boxplot figure
+figure3 <- ggplot(figure3_data, aes(x = gen, y = stat_value, fill = stat_type)) +
+  geom_boxplot(
+    position = position_dodge(0.8),
+    width = 0.7,
+    alpha = 0.8,
+    outlier.shape = 21,
+    outlier.size = 1.5,
+    outlier.alpha = 0.5
+  ) +
+  scale_fill_brewer(palette="Paired")+
+  labs(
+    title = "Attack vs Special Attack by Generation",
+    x = "Generation",
+    y = "Base Stat Value",
+    fill= "Stat"
+  ) +
+  theme_bw() +
+  theme(
+    legend.position = "top",
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.x = element_blank(),
+    axis.text.x = element_text(size = 10),
+    axis.text.y = element_text(size = 10),
+    axis.title = element_text(size = 12),
+    plot.title = element_text(size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 12, hjust = 0.5, color = "gray40")
+  ) +
+  # Add sample size labels for each generation
+  annotate(
+    "text",
+    x = levels(figure3_data$gen),
+    y = max(figure3_data$stat_value, na.rm = TRUE) * 1.02,
+    label = paste0("n=", table(pokemon_clean %>% 
+                                distinct(national_number, .keep_all = TRUE) %>% 
+                                pull(gen))[levels(figure3_data$gen)]),
+    size = 3,
+    color = "gray40"
+  )
+
+print(figure3)
+```
+
+This figure compares offensive stat distributions across generations. Early generations show lower stats in general compared to newer generations, suggesting power creep. Earlier generations display balanced attack distributions, whereas later generations have a growing disparity, reflecting mechanical changes introduced in Generation IV and onward. Unique regional battle gimmicks were introduced, so it is interesting to see that reflected in the stats of Pokemon. This could be a technique to motivate more purchases and attract a larger player base with each new generation added.
+
+```{r}
+pokemon_df <- pokemon_df %>%
+  mutate(
+    defense_score = ifelse(defense > sp_defense, defense, sp_defense),
+    offense_defense_ratio = (attack + sp_attack) / (defense + sp_defense)
+  )
+
+plot6 <- ggplot(pokemon_df, aes(x = weight_kg, y = defense_score)) +
+  geom_point(aes(color = log(height_m)), alpha = 0.7) +
+  geom_smooth(method = "lm", se = TRUE, color = "black", linewidth = 0.8) +
+  scale_x_log10() +
+  scale_y_log10() +
+  scale_color_viridis_c(option = "plasma") +
+  labs(
+    title = "Pokemon Bulk vs. Defensive Capability",
+    x = "Weight (kg, log scale)",
+    y = "Super Defense Stat (log scale)",
+    color = "Height (m, log scale)",
+  ) +
+  theme_bw() +
+  theme(
+    legend.position = "right",
+    plot.title = element_text(),
+  )
+
+print(plot6)
+```
+
+This figure examines the relationship between defensive strength and physical body size. Heavier Pokemon tend to display higher defensive stats. Height shows a moderate positive association with defensive capacity. This makes sense as Pokemon grow in height and weight with evolution; as stats also increase with evolution, the observed association is likely explained by this phenomenon. In addition, lighter Pokemon tend to be faster and fill more offensive roles leading to increased attack/special attack. Thus, defense is low for these Pokemon.
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+
+# Prepare data: calculate total stats
+pokemon_stats <- pokemon_df %>%
+  filter(!tier %in% c("National Dex", "NA")) %>%  # exclude National Dex and NA tiers
+  mutate(total_stats = hp + attack + defense + sp_attack + sp_defense + speed) %>%
+  # Replace missing types with "None"
+  mutate(primary_type = replace_na(primary_type, "None"),
+         secondary_type = replace_na(secondary_type, "None")) %>%
+  # Gather types into long format
+  pivot_longer(cols = c(primary_type, secondary_type), names_to = "type_role", values_to = "type") %>%
+  filter(type != "None" & !is.na(tier))  # remove placeholder type and NA tiers
+
+# Compute average total stats by tier and type
+pokemon_heatmap <- pokemon_stats %>%
+  group_by(tier, type) %>%
+  summarise(avg_total = mean(total_stats, na.rm = TRUE), 
+            count = n(), .groups = "drop")
+
+# Heatmap
+ggplot(pokemon_heatmap, aes(x = tier, y = type, fill = avg_total)) +
+  geom_tile(color = "white") +
+  scale_fill_viridis_c(option = "plasma", name = "Avg Total Stats") +
+  theme_minimal() +
+  labs(
+    title = "Average Base Stat Total by Tier and Type",
+    x = "Competitive Tier",
+    y = "Type"
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+This heatmap reveals how competitive tier interacts with Pokemon typing. High-tier Pokemon consistently show higher base stat totals across most types, but some types such as bug have very few Pokemon in high tiers (leading to some missing cells). This has to do with limited selection of viable Pokemon due to being outclassed or having poor match-ups. NFE and LC having extremely low base stat totals across all types is explained by the constraints of these formats on maximum evolution stage since evolution significantly impacts base stat totals.
+
+```{r smogon}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(Rtsne)
+
+# ----------------------------
+# Prepare data
+# ----------------------------
+pokemon_clust <- pokemon_df %>%
+  filter(!tier %in% c("National Dex", "NA")) %>%
+  select(hp, attack, defense, sp_attack, sp_defense, speed, primary_type, secondary_type, tier) %>%
+  mutate(
+    secondary_type = replace_na(secondary_type, "None"),
+    primary_type = replace_na(primary_type, "None")
+  )
+
+# One-hot encode type columns
+pokemon_types <- pokemon_clust %>%
+  select(primary_type, secondary_type) %>%
+  mutate(across(everything(), as.factor)) %>%
+  model.matrix(~ . - 1, data = .) %>%
+  as.data.frame()
+
+# Combine base stats with type dummies
+pokemon_numeric <- cbind(
+  pokemon_clust %>% select(hp, attack, defense, sp_attack, sp_defense, speed),
+  pokemon_types
+)
+
+# Remove duplicates and ensure numeric
+pokemon_numeric_unique <- pokemon_numeric %>% distinct()
+pokemon_scaled <- as.data.frame(scale(pokemon_numeric_unique))
+
+# ----------------------------
+# K-means clustering
+# ----------------------------
+set.seed(123)
+k <- 5
+kmeans_res <- kmeans(pokemon_scaled, centers = k, nstart = 25)
+pokemon_scaled$cluster <- factor(kmeans_res$cluster)
+
+# ----------------------------
+# t-SNE
+# ----------------------------
+set.seed(123)
+tsne_res <- Rtsne(as.matrix(pokemon_scaled %>% select(-cluster)), dims = 2, perplexity = 30)
+
+# ----------------------------
+# Prepare data for faceted plot
+# ----------------------------
+# Keep tiers aligned with unique rows
+tier_unique <- pokemon_clust %>%
+  bind_cols(pokemon_types) %>%
+  distinct() %>%
+  pull(tier)
+
+tsne_df <- data.frame(
+  X = tsne_res$Y[,1],
+  Y = tsne_res$Y[,2],
+  cluster = pokemon_scaled$cluster,
+  tier = tier_unique
+)
+
+# Convert cluster and tier to character to avoid type conflict
+tsne_df <- tsne_df %>%
+  mutate(
+    cluster = as.character(cluster),
+    tier = as.character(tier)
+  )
+
+# Now reshape to long format
+tsne_long <- tsne_df %>%
+  pivot_longer(cols = c(cluster, tier), names_to = "plot_type", values_to = "label")
+library(ggplot2)
+library(ggforce)  # optional, can use patchwork instead
+library(patchwork)
+
+# Cluster plot
+cluster_plot <- ggplot(tsne_df, aes(x = X, y = Y, color = cluster)) +
+  geom_point(size = 2, alpha = 0.8) +
+scale_color_brewer(palette="Set1")+
+    theme_bw() +
+  labs(title = "Clustering by Base Stats", x = "t-SNE 1", y = "t-SNE 2", color = "Cluster")
+
+# Tier plot
+tier_plot <- ggplot(tsne_df, aes(x = X, y = Y, color = tier)) +
+  geom_point(size = 2, alpha = 0.8) +
+  scale_color_viridis_d(option = "plasma") +
+  theme_bw() +
+  labs(title = "Clustering Visualized by Tier", x = "t-SNE 1", y = "t-SNE 2", color = "Tier")
+
+# Combine plots side by side
+combined_plot <- cluster_plot + tier_plot + plot_layout(ncol = 2)
+
+combined_plot
+
+```
+
+This visualization groups Pokemon based on base stats and typing. Distinct clusters emerge representing fast attackers, defensive tanks, and balanced generalists. When colored by competitive tier, I noticed stronger tiers are concentrated in high-stat clusters.
+
+
+### Concluding notes
+
+This analysis demonstrates that Pokemon competitive viability is strongly driven by base stat composition and only secondarily by typing. High-tier Pokemon consistently occupy the upper ends of both offensive and defensive stat distributions. Generational comparisons highlight structural shifts in offensive balance over time.
+
+Future analysis could incorporate move-set data, ability data, and battle win-rate modeling from regionals, nationals, and worlds tournaments of the VGC format using logistic regression. I hypothesize that a lot of the observed variability in my results could be explained by move-set and ability. Lots of Pokemon have unique abilities- some being especially game-changing. Thus, things such as typing and base stat totals are often overlooked in light of a Pokemon's ability. This applies for moves as well; certain competitive strategies are very dependent on access to a particular move.
+
+In addition, a pairwise and correlation analysis between Pokemon to study team-building could be a future area of analysis. Pokemon often have synergy with each other and require their supports to be included in a team. This may have influenced Smogon competitive tier assignments, which is something I could investigate in the future.
